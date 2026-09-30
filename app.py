@@ -10,13 +10,6 @@ st.set_page_config(page_title="Luyện thi ICAO Level 4", page_icon="✈️", la
 st.markdown("""
     <style>
     /* TÙY CHỈNH KHU VỰC LÀM BÀI CHÍNH (MAIN) */
-    section[data-testid="stMain"] div[role="radiogroup"] label p {
-        font-size: 17px !important;
-        font-weight: 500;
-    }
-    section[data-testid="stMain"] .stMarkdown, section[data-testid="stMain"] .stRadio {
-        margin-bottom: -10px !important;
-    }
     section[data-testid="stMain"] div[data-testid="stMarkdownContainer"] {
         margin-bottom: 5px !important;
     }
@@ -46,7 +39,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Lấy đường link API từ Secrets (Nếu chưa set trong Secrets thì dùng link cứng dự phòng)
+# Lấy đường link API từ Secrets
 API_URL = st.secrets.get("API_URL", "https://script.google.com/macros/s/AKfycbxeWNQeOcccY3QVjqGiyIROaOOvzCBmpLbIstLgW9IaDR6pzFxXh6j6S99bvno0Yl-T/exec")
 
 if 'executor' not in st.session_state:
@@ -84,15 +77,22 @@ def save_icao_progress():
     }
     st.session_state.executor.submit(_async_post_request, API_URL, payload)
 
-def on_answer_change(idx_str):
-    selected_val = st.session_state[f"nhap_{idx_str}"]
-    st.session_state.icao_answers[idx_str] = selected_val
+# Hàm Callback: Đánh dấu xong toàn bộ Track và chuyển bài
+def complete_track_and_next(tracks_list, current_track_indices):
+    # 1. Đánh dấu hoàn tất TẤT CẢ câu hỏi trong bài nghe hiện tại
+    for idx in current_track_indices:
+        st.session_state.icao_answers[str(idx)] = True
     save_icao_progress()
-
-# Hàm Callback chuyển đổi bài hát tránh lỗi xung đột Widget
-def change_track(step, tracks_list):
+    
+    # 2. Chuyển hướng sang bài tiếp theo
     current_idx = tracks_list.index(st.session_state.selected_track_key)
-    st.session_state.selected_track_key = tracks_list[current_idx + step]
+    if current_idx < len(tracks_list) - 1:
+        st.session_state.selected_track_key = tracks_list[current_idx + 1]
+
+def go_prev_track(tracks_list):
+    current_idx = tracks_list.index(st.session_state.selected_track_key)
+    if current_idx > 0:
+        st.session_state.selected_track_key = tracks_list[current_idx - 1]
 
 # --- 4. TẢI DỮ LIỆU ĐỀ THI VÀ AUDIO ---
 @st.cache_data(ttl=60)
@@ -128,7 +128,7 @@ if st.session_state.user_name == "":
     st.markdown("<br><hr><p style='text-align: center; color: gray; font-style: italic;'>💡 Tiến độ làm bài của bạn sẽ được lưu trữ đám mây, tự động khôi phục trên mọi thiết bị.</p>", unsafe_allow_html=True)
     st.stop()
 
-# --- TẢI TIẾN ĐỘ TỪ CLOUD CHO NGƯỜI DÙNG HIỆN TẠI ---
+# --- TẢI TIẾN ĐỘ TỪ CLOUD ---
 if not df.empty and not st.session_state.db_loaded:
     with st.spinner("🔄 Đang đồng bộ tiến độ ôn tập từ Cloud..."):
         progress = fetch_progress_from_db(st.session_state.user_name)
@@ -158,7 +158,8 @@ with st.sidebar:
     if "selected_track_key" not in st.session_state:
         st.session_state.selected_track_key = unique_tracks[0]
     
-    completed_count = len([x for x in st.session_state.icao_answers.values() if str(x).strip() != ""])
+    # Tính số câu đã đánh dấu hoàn thành
+    completed_count = len([x for x in st.session_state.icao_answers.values() if x == True])
     st.info(f"📊 Tiến độ tổng: **{completed_count}/{len(df)}** câu")
 
     selected_track = st.selectbox(
@@ -167,18 +168,12 @@ with st.sidebar:
         key="selected_track_key"
     )
     
-    if st.button("🗑️ Xóa tiến độ bài này"):
-        track_indices = df[df['Track_Name'] == selected_track].index.tolist()
-        for idx in track_indices:
-            idx_str = str(idx)
-            if idx_str in st.session_state.icao_answers:
-                del st.session_state.icao_answers[idx_str]
+    if st.button("🗑️ Xóa tất cả tiến độ"):
+        st.session_state.icao_answers = {}
         save_icao_progress()
         st.rerun()
         
     st.write("---")
-    st.markdown("<p style='text-align: center; color: #888; font-style: italic; font-size: 14px;'>Hệ thống lưu tự động khi bạn gõ xong đáp án</p>", unsafe_allow_html=True)
-
 
 # --- 7. KHU VỰC HIỂN THỊ CHÍNH ---
 st.title("✈️ Luyện nghe Tiếng Anh Hàng không")
@@ -187,13 +182,14 @@ if df.empty:
     st.warning("⚠️ Cơ sở dữ liệu đang trống hoặc link tải file bị lỗi.")
 else:
     track_data = df[df['Track_Name'] == selected_track]
+    current_track_indices = track_data.index.tolist()
     
     st.markdown("---")
     st.subheader(f"Đang phát: {selected_track}")
     
     drive_id = track_data.iloc[0]['Drive_ID']
     if pd.isna(drive_id) or str(drive_id).strip() == "":
-        st.error("⚠️️ Bài này chưa có ID Audio.")
+        st.error("⚠️ Bài này chưa có ID Audio.")
     else:
         with st.spinner('Đang tải Audio từ Cloud...'):
             audio_bytes = load_audio(drive_id)
@@ -201,36 +197,36 @@ else:
 
     st.markdown("### 📝 Câu hỏi bài tập")
 
-    for index, row in track_data.iterrows():
-        idx_str = str(index)
-        
+    # Kiểm tra xem Track này đã được hoàn tất chưa
+    all_done = all([st.session_state.icao_answers.get(str(idx), False) for idx in current_track_indices])
+    if all_done:
+        st.success("✅ Bạn đã hoàn tất bài nghe này!")
+
+    for i, (index, row) in enumerate(track_data.iterrows()):
         with st.container():
-            st.write(f"**{row['Question']}**")
-            
-            prev_val = st.session_state.icao_answers.get(idx_str, "")
-            
-            st.text_area(
-                "Nhập câu trả lời (nháp):", 
-                value=prev_val, 
-                height=80, 
-                key=f"nhap_{idx_str}",
-                on_change=on_answer_change,
-                args=(idx_str,)
-            )
+            st.write(f"**Câu {i+1}: {row['Question']}**")
             
             with st.expander(f"👁️ Xem đáp án chuẩn"):
                 st.info(f"**Đáp án:** {row['Answer']}")
             st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- KHU VỰC NÚT ĐIỀU HƯỚNG BÀI NGHE (DÙNG CALLBACK) ---
+    # --- KHU VỰC NÚT ĐIỀU HƯỚNG BÀI NGHE ---
     st.write("---")
     col1, col2, col3 = st.columns([1, 4, 1])
     
     current_track_idx = unique_tracks.index(selected_track)
     
     if current_track_idx > 0:
-        # Sử dụng on_click để chuyển bài mượt mà
-        col1.button("⬅ Bài trước", on_click=change_track, args=(-1, unique_tracks))
+        col1.button("⬅ Bài trước", on_click=go_prev_track, args=(unique_tracks,))
 
     if current_track_idx < len(unique_tracks) - 1:
-        col3.button("Bài tiếp theo ➡️", on_click=change_track, args=(1, unique_tracks))
+        # Nút Next Track đóng vai trò đánh dấu hoàn thành toàn bộ Track
+        col3.button("Hoàn tất & Sang bài tiếp theo ➡️", on_click=complete_track_and_next, args=(unique_tracks, current_track_indices), type="primary")
+    else:
+        # Nút cho Track cuối cùng
+        if col3.button("Hoàn tất toàn bộ 🎉", type="primary"):
+            for idx in current_track_indices:
+                st.session_state.icao_answers[str(idx)] = True
+            save_icao_progress()
+            st.success("Chúc mừng bạn đã ôn xong tất cả các bài nghe!")
+            st.balloons()
