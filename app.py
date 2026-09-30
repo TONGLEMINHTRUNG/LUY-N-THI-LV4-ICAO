@@ -3,7 +3,6 @@ import pandas as pd
 import requests
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
 
 # --- 1. CẤU HÌNH GIAO DIỆN VÀ CSS THU GỌN ---
 st.set_page_config(page_title="Luyện thi ICAO Level 4", page_icon="✈️", layout="wide")
@@ -19,10 +18,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# Lấy đường link API (Google Apps Script)
 API_URL = st.secrets.get("API_URL", "https://script.google.com/macros/s/AKfycbxeWNQeOcccY3QVjqGiyIROaOOvzCBmpLbIstLgW9IaDR6pzFxXh6j6S99bvno0Yl-T/exec")
-
-if 'executor' not in st.session_state:
-    st.session_state.executor = ThreadPoolExecutor(max_workers=2)
 
 # --- DỮ LIỆU TRANSCRIPT (TỪ PDF) ---
 TRANSCRIPT_TEXT = """
@@ -351,44 +348,47 @@ def get_transcripts_dict():
             t_dict[current_track] = part.strip()
     return t_dict
 
-# -------------------------------------------------------------
-
 # --- 2. QUẢN LÝ TRẠNG THÁI ---
 def init_states():
     if 'user_name' not in st.session_state: st.session_state.user_name = ""
     if 'db_loaded' not in st.session_state: st.session_state.db_loaded = False
-    if 'icao_answers' not in st.session_state: st.session_state.icao_answers = {}
+    
+    # Ở đây chúng ta thay thế bộ nhớ 'từng câu' bằng bộ nhớ 'từng Track'
+    if 'tracks_completed' not in st.session_state: st.session_state.tracks_completed = []
 
 init_states()
 
-# --- 3. CÁC HÀM TỰ ĐỘNG ĐỒNG BỘ CLOUD (BẤT ĐỒNG BỘ) ---
+# --- 3. CÁC HÀM TỰ ĐỘNG ĐỒNG BỘ CLOUD (THEO TRACK) ---
 def fetch_progress_from_db(user):
     if not API_URL: return None
     try:
-        res = requests.get(f"{API_URL}?action=get_progress&user={user}&quiz=ICAO_Listening", timeout=5)
+        # Gửi request không chạy nền để đảm bảo lấy được dữ liệu khi F5
+        res = requests.get(f"{API_URL}?action=get_progress&user={user}", timeout=5)
         if res.status_code == 200: return res.json()
     except: pass
     return None
 
-def _async_post_request(url, payload):
-    try:
-        requests.post(url, json=payload, timeout=5)
-    except: pass
-
 def save_icao_progress():
+    # Khi nút "Bài tiếp theo" được bấm, đẩy danh sách Track đã xong lên Drive
     if not API_URL or st.session_state.user_name == "": return
     payload = {
-        "action": "save_progress", "mode": "icao_listening",
-        "user": st.session_state.user_name, "quiz": "ICAO_Listening",
-        "mt_answers": json.dumps(st.session_state.icao_answers),
+        "user": st.session_state.user_name, 
+        "track_completed": json.dumps(st.session_state.tracks_completed)
     }
-    st.session_state.executor.submit(_async_post_request, API_URL, payload)
+    # Sử dụng request.post thẳng (không chạy nền) để đảm bảo không rớt mạng giữa chừng khi chuyển trang
+    try:
+        requests.post(API_URL, json=payload, timeout=5)
+    except: pass
 
-def complete_track_and_next(tracks_list, current_track_indices):
-    for idx in current_track_indices:
-        st.session_state.icao_answers[str(idx)] = True
-    save_icao_progress()
-    current_idx = tracks_list.index(st.session_state.selected_track_key)
+def complete_track_and_next(tracks_list):
+    # Đánh dấu Track hiện tại là đã xong
+    current_track = st.session_state.selected_track_key
+    if current_track not in st.session_state.tracks_completed:
+        st.session_state.tracks_completed.append(current_track)
+        save_icao_progress() # Đồng bộ lên Cloud ngay lập tức
+    
+    # Chuyển sang bài tiếp theo
+    current_idx = tracks_list.index(current_track)
     if current_idx < len(tracks_list) - 1:
         st.session_state.selected_track_key = tracks_list[current_idx + 1]
 
@@ -416,10 +416,10 @@ def load_audio(drive_id):
 # --- 5. MÀN HÌNH KHAI BÁO TÊN BAN ĐẦU ---
 if st.session_state.user_name == "":
     st.title("✈️ Phần mềm Luyện Nghe ICAO Level 4")
-    st.subheader("Đóng góp ý kiến và update dữ liệu vui lòng liên hệ CB")
+    st.subheader("Hệ thống tự động đồng bộ tiến độ học")
     
     with st.form("identity_form"):
-        name_input = st.text_input("Nhập tên tắt của bạn (VD: CB):")
+        name_input = st.text_input("Nhập Tên định danh của bạn (VD: TrungATC):")
         submit_identity = st.form_submit_button("Bắt đầu ôn tập 🚀")
         if submit_identity:
             if name_input.strip() == "":
@@ -429,7 +429,7 @@ if st.session_state.user_name == "":
                 st.session_state.db_loaded = False
                 st.rerun()
     
-    st.markdown("<br><hr><p style='text-align: center; color: gray; font-style: italic;'>💡 Tiến độ làm bài của bạn sẽ được lưu trữ đám mây, tự động khôi phục trên mọi thiết bị.</p>", unsafe_allow_html=True)
+    st.markdown("<br><hr><p style='text-align: center; color: gray; font-style: italic;'>💡 Tiến độ bài nghe của bạn sẽ được lưu theo Track lên Cloud, tắt máy mở lại không bị mất.</p>", unsafe_allow_html=True)
     st.stop()
 
 # --- TẢI TIẾN ĐỘ TỪ CLOUD ---
@@ -438,11 +438,11 @@ if not df.empty and not st.session_state.db_loaded:
         progress = fetch_progress_from_db(st.session_state.user_name)
         
         if progress and progress.get("status") == "found":
-            mt_ans_str = progress.get("mt_answers", "{}")
-            if mt_ans_str:
-                st.session_state.icao_answers = json.loads(mt_ans_str)
+            tracks_str = progress.get("track_completed", "[]")
+            if tracks_str:
+                st.session_state.tracks_completed = json.loads(tracks_str)
         else:
-            st.session_state.icao_answers = {}
+            st.session_state.tracks_completed = []
             
         st.session_state.db_loaded = True
         st.rerun()
@@ -462,17 +462,31 @@ with st.sidebar:
     if "selected_track_key" not in st.session_state:
         st.session_state.selected_track_key = unique_tracks[0]
     
-    completed_count = len([x for x in st.session_state.icao_answers.values() if x == True])
-    st.info(f"📊 Tiến độ tổng: **{completed_count}/{len(df)}** câu")
+    completed_count = len(st.session_state.tracks_completed)
+    total_tracks = len(unique_tracks)
+    st.info(f"📊 Tiến độ tổng: **{completed_count}/{total_tracks}** Track")
 
-    selected_track = st.selectbox(
-        "📌 Danh sách Track:", 
-        unique_tracks,
-        key="selected_track_key"
-    )
+    # Tạo giao diện Danh sách Track (Đánh dấu check cho bài đã học)
+    display_tracks = []
+    for t in unique_tracks:
+        if t in st.session_state.tracks_completed:
+            display_tracks.append(f"✅ {t}")
+        else:
+            display_tracks.append(f"📖 {t}")
+
+    # Đồng bộ hóa hộp chọn với lựa chọn hiện tại
+    current_display = f"✅ {st.session_state.selected_track_key}" if st.session_state.selected_track_key in st.session_state.tracks_completed else f"📖 {st.session_state.selected_track_key}"
     
-    if st.button("🗑️ Xóa tất cả tiến độ"):
-        st.session_state.icao_answers = {}
+    selected_display = st.selectbox(
+        "📌 Danh sách Track:", 
+        display_tracks,
+        index=display_tracks.index(current_display)
+    )
+    # Tách chuỗi hiển thị để lấy lại tên Track gốc (VD: "✅ Track 01" -> "Track 01")
+    st.session_state.selected_track_key = selected_display[2:].strip()
+    
+    if st.button("🗑️ Xóa toàn bộ tiến độ"):
+        st.session_state.tracks_completed = []
         save_icao_progress()
         st.rerun()
         
@@ -484,8 +498,8 @@ st.title("✈️ Luyện nghe Tiếng Anh Hàng không")
 if df.empty:
     st.warning("⚠️ Cơ sở dữ liệu đang trống hoặc link tải file bị lỗi.")
 else:
+    selected_track = st.session_state.selected_track_key
     track_data = df[df['Track_Name'] == selected_track]
-    current_track_indices = track_data.index.tolist()
     
     st.markdown("---")
     st.subheader(f"Đang phát: {selected_track}")
@@ -495,22 +509,20 @@ else:
     if pd.isna(drive_id) or str(drive_id).strip() == "":
         st.error("⚠️ Bài này chưa có ID Audio.")
     else:
-        with st.spinner('Đang tải Audio từ Cloud...'):
+        with st.spinner('Đang tải Audio...'):
             audio_bytes = load_audio(drive_id)
             st.audio(audio_bytes, format="audio/mp3")
 
     # 7.2. HIỂN THỊ TRANSCRIPT (KỊCH BẢN) NGAY DƯỚI AUDIO
     with st.expander("📖 Xem Transcript (Kịch bản hội thoại)"):
         script_text = transcript_dict.get(selected_track, "Chưa có dữ liệu Transcript cho bài này.")
-        # Định dạng lại văn bản để Markdown xuống dòng chính xác
         st.markdown(script_text.replace('\n', '  \n'))
 
-    # 7.3. HIỂN THỊ CÂU HỎI VÀ ĐÁP ÁN
+    # 7.3. HIỂN THỊ CÂU HỎI VÀ ĐÁP ÁN (Dọn sạch ô nhập liệu)
     st.markdown("### 📝 Câu hỏi bài tập")
 
-    all_done = all([st.session_state.icao_answers.get(str(idx), False) for idx in current_track_indices])
-    if all_done:
-        st.success("✅ Bạn đã hoàn tất bài nghe này!")
+    if selected_track in st.session_state.tracks_completed:
+        st.success("✅ Bạn đã ôn xong Track này!")
 
     for i, (index, row) in enumerate(track_data.iterrows()):
         with st.container():
@@ -530,11 +542,12 @@ else:
         col1.button("⬅ Bài trước", on_click=go_prev_track, args=(unique_tracks,))
 
     if current_track_idx < len(unique_tracks) - 1:
-        col3.button("Hoàn tất & Sang bài tiếp theo ➡️", on_click=complete_track_and_next, args=(unique_tracks, current_track_indices), type="primary")
+        # Nút Next Track đóng vai trò đánh dấu hoàn thành toàn bộ Track lên Cloud
+        col3.button("Hoàn tất & Sang bài tiếp theo ➡️", on_click=complete_track_and_next, args=(unique_tracks,), type="primary")
     else:
         if col3.button("Hoàn tất toàn bộ 🎉", type="primary"):
-            for idx in current_track_indices:
-                st.session_state.icao_answers[str(idx)] = True
-            save_icao_progress()
-            st.success("Chúc mừng bạn đã ôn xong tất cả các bài nghe!")
+            if selected_track not in st.session_state.tracks_completed:
+                st.session_state.tracks_completed.append(selected_track)
+                save_icao_progress()
+            st.success("Chúc mừng bạn đã ôn xong 50 bài nghe!")
             st.balloons()
