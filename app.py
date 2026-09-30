@@ -46,7 +46,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Lấy đường link API từ Secrets (Nếu chưa set trong Secrets thì dùng link cứng dự phòng)
+# Lấy đường link API từ Secrets
 API_URL = st.secrets.get("API_URL", "https://script.google.com/macros/s/AKfycbxeWNQeOcccY3QVjqGiyIROaOOvzCBmpLbIstLgW9IaDR6pzFxXh6j6S99bvno0Yl-T/exec")
 
 if 'executor' not in st.session_state:
@@ -82,7 +82,6 @@ def save_icao_progress():
     payload = {
         "action": "save_progress", "mode": "icao_listening",
         "user": st.session_state.user_name, "quiz": "ICAO_Listening",
-        # Lưu các câu trả lời nháp của người dùng vào biến mt_answers để dùng chung kiến trúc Progress cũ
         "mt_answers": json.dumps(st.session_state.icao_answers),
     }
     st.session_state.executor.submit(_async_post_request, API_URL, payload)
@@ -94,17 +93,14 @@ def on_answer_change(idx_str):
     save_icao_progress()
 
 # --- 4. TẢI DỮ LIỆU ĐỀ THI VÀ AUDIO ---
-# 1. Tải danh sách câu hỏi
 @st.cache_data(ttl=60)
 def load_database():
-    # LINK TỚI FILE GOOGLE SHEETS 167 CÂU HỎI TSV (Cần tham số sep='\t')
     sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQo3-ExtlDVOnEaTOC2rJMMzbHbazP2CxWGCNG7nyjKwaj8I9EyAfapCg6EUQxi5POgufMmkSxpRXf-/pub?output=tsv"
     df = pd.read_csv(sheet_url, sep='\t')
     return df.dropna(subset=['Track_Name'])
 
 df = load_database()
 
-# 2. Tải ngầm file âm thanh từ Drive về để chống lỗi chặn Web
 @st.cache_data(show_spinner=False)
 def load_audio(drive_id):
     url = f"https://drive.google.com/uc?export=download&id={drive_id}"
@@ -130,7 +126,7 @@ if st.session_state.user_name == "":
     st.markdown("<br><hr><p style='text-align: center; color: gray; font-style: italic;'>💡 Tiến độ làm bài của bạn sẽ được lưu trữ đám mây, tự động khôi phục trên mọi thiết bị.</p>", unsafe_allow_html=True)
     st.stop()
 
-# --- TẢI TIẾN ĐỘ TỪ CLOUD CHO NGƯỜI DÙNG HIỆN TẠI ---
+# --- TẢI TIẾN ĐỘ TỪ CLOUD ---
 if not df.empty and not st.session_state.db_loaded:
     with st.spinner("🔄 Đang đồng bộ tiến độ ôn tập từ Cloud..."):
         progress = fetch_progress_from_db(st.session_state.user_name)
@@ -157,14 +153,21 @@ with st.sidebar:
     st.title("🎧 Chọn Bài Nghe")
     unique_tracks = df['Track_Name'].unique().tolist()
     
-    # Tính số câu đã hoàn thành để hiển thị trạng thái
+    # Khởi tạo giá trị mặc định cho hộp chọn Track nếu chưa có
+    if "selected_track_key" not in st.session_state:
+        st.session_state.selected_track_key = unique_tracks[0]
+    
     completed_count = len([x for x in st.session_state.icao_answers.values() if str(x).strip() != ""])
     st.info(f"📊 Tiến độ tổng: **{completed_count}/{len(df)}** câu")
 
-    selected_track = st.selectbox("📌 Danh sách Track:", unique_tracks)
+    # Gắn biến session_state vào Selectbox để có thể điều khiển nó từ bên ngoài
+    selected_track = st.selectbox(
+        "📌 Danh sách Track:", 
+        unique_tracks,
+        key="selected_track_key"
+    )
     
     if st.button("🗑️ Xóa tiến độ bài này"):
-        # Lọc ra các câu hỏi của bài này
         track_indices = df[df['Track_Name'] == selected_track].index.tolist()
         for idx in track_indices:
             idx_str = str(idx)
@@ -188,7 +191,6 @@ else:
     st.markdown("---")
     st.subheader(f"Đang phát: {selected_track}")
     
-    # Phát Audio từ Drive (lấy Drive ID từ dòng đầu tiên của Track)
     drive_id = track_data.iloc[0]['Drive_ID']
     if pd.isna(drive_id) or str(drive_id).strip() == "":
         st.error("⚠️ Bài này chưa có ID Audio.")
@@ -199,17 +201,14 @@ else:
 
     st.markdown("### 📝 Câu hỏi bài tập")
 
-    # Lặp qua tất cả các câu hỏi của bài Track hiện tại
     for index, row in track_data.iterrows():
         idx_str = str(index)
         
         with st.container():
             st.write(f"**{row['Question']}**")
             
-            # Khôi phục đáp án nháp từ hệ thống
             prev_val = st.session_state.icao_answers.get(idx_str, "")
             
-            # Ô nháp tự động lưu tiến độ
             st.text_area(
                 "Nhập câu trả lời (nháp):", 
                 value=prev_val, 
@@ -231,18 +230,12 @@ else:
     
     if current_track_idx > 0:
         if col1.button("⬅ Bài trước"):
-            # Cách mượn tham số query của Streamlit để nhảy bài không cần st.session_state quá phức tạp
-            st.query_params.track = unique_tracks[current_track_idx - 1]
+            # Cập nhật trực tiếp State của Selectbox
+            st.session_state.selected_track_key = unique_tracks[current_track_idx - 1]
             st.rerun()
 
     if current_track_idx < len(unique_tracks) - 1:
         if col3.button("Bài tiếp theo ➡️"):
-            st.query_params.track = unique_tracks[current_track_idx + 1]
-            st.rerun()
-            
-    # Bắt tín hiệu từ tham số URL để chuyển đổi bài (Hỗ trợ nút bấm Next/Back)
-    if 'track' in st.query_params:
-        target_track = st.query_params.track
-        if target_track in unique_tracks and target_track != selected_track:
-            del st.query_params['track'] # Dọn dẹp URL
+            # Cập nhật trực tiếp State của Selectbox
+            st.session_state.selected_track_key = unique_tracks[current_track_idx + 1]
             st.rerun()
