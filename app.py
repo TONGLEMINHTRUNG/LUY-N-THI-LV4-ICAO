@@ -9,7 +9,7 @@ st.caption("Dạng bài tập: Nghe và trả lời tự luận")
 @st.cache_data(ttl=60)
 def load_database():
     # THAY ĐƯỜNG LINK DƯỚI ĐÂY BẰNG LINK BẠN ĐÃ COPY Ở GIAI ĐOẠN 1
-    sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQo3-ExtlDVOnEaTOC2rJMMzbHbazP2CxWGCNG7nyjKwaj8I9EyAfapCg6EUQxi5POgufMmkSxpRXf-/pub?output=tsv"
+    sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQo3-ExtlDVOnEaTOC2rJMMzbHbazP2CxWGCNG7nyjKwaj8I9EyAfapCg6EUQxi5POgufMmkSxpRXf-/pub?output=csv"
     return pd.read_csv(sheet_url)
 
 df = load_database()
