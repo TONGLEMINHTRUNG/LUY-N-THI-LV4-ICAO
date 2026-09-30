@@ -417,4 +417,124 @@ def load_audio(drive_id):
 if st.session_state.user_name == "":
     st.title("✈️ Phần mềm Luyện Nghe ICAO Level 4")
     st.subheader("Hệ thống tự động đồng bộ tiến độ học")
-  
+    
+    with st.form("identity_form"):
+        name_input = st.text_input("Nhập Tên định danh của bạn (VD: TrungATC):")
+        submit_identity = st.form_submit_button("Bắt đầu ôn tập 🚀")
+        if submit_identity:
+            if name_input.strip() == "":
+                st.warning("Vui lòng điền tên định danh cá nhân!")
+            else:
+                st.session_state.user_name = name_input.strip()
+                st.session_state.db_loaded = False
+                st.rerun()
+    
+    st.markdown("<br><hr><p style='text-align: center; color: gray; font-style: italic;'>💡 Tiến độ làm bài của bạn sẽ được lưu trữ đám mây, tự động khôi phục trên mọi thiết bị.</p>", unsafe_allow_html=True)
+    st.stop()
+
+# --- TẢI TIẾN ĐỘ TỪ CLOUD ---
+if not df.empty and not st.session_state.db_loaded:
+    with st.spinner("🔄 Đang đồng bộ tiến độ ôn tập từ Cloud..."):
+        progress = fetch_progress_from_db(st.session_state.user_name)
+        
+        if progress and progress.get("status") == "found":
+            mt_ans_str = progress.get("mt_answers", "{}")
+            if mt_ans_str:
+                st.session_state.icao_answers = json.loads(mt_ans_str)
+        else:
+            st.session_state.icao_answers = {}
+            
+        st.session_state.db_loaded = True
+        st.rerun()
+
+# --- 6. GIAO DIỆN MENU BÊN TRÁI ---
+with st.sidebar:
+    st.success(f"👤 Học viên: **{st.session_state.user_name}**")
+    if st.button("🚪 Đổi tài khoản / Đăng xuất"):
+        st.session_state.user_name = ""
+        st.session_state.db_loaded = False
+        st.rerun()
+        
+    st.divider()
+    st.title("🎧 Chọn Bài Nghe")
+    unique_tracks = df['Track_Name'].unique().tolist()
+    
+    if "selected_track_key" not in st.session_state:
+        st.session_state.selected_track_key = unique_tracks[0]
+    
+    completed_count = len([x for x in st.session_state.icao_answers.values() if x == True])
+    st.info(f"📊 Tiến độ tổng: **{completed_count}/{len(df)}** câu")
+
+    selected_track = st.selectbox(
+        "📌 Danh sách Track:", 
+        unique_tracks,
+        key="selected_track_key"
+    )
+    
+    if st.button("🗑️ Xóa tất cả tiến độ"):
+        st.session_state.icao_answers = {}
+        save_icao_progress()
+        st.rerun()
+        
+    st.write("---")
+
+# --- 7. KHU VỰC HIỂN THỊ CHÍNH ---
+st.title("✈️ Luyện nghe Tiếng Anh Hàng không")
+
+if df.empty:
+    st.warning("⚠️ Cơ sở dữ liệu đang trống hoặc link tải file bị lỗi.")
+else:
+    track_data = df[df['Track_Name'] == selected_track]
+    current_track_indices = track_data.index.tolist()
+    
+    st.markdown("---")
+    st.subheader(f"Đang phát: {selected_track}")
+    
+    # 7.1. PHÁT AUDIO
+    drive_id = track_data.iloc[0]['Drive_ID']
+    if pd.isna(drive_id) or str(drive_id).strip() == "":
+        st.error("⚠️ Bài này chưa có ID Audio.")
+    else:
+        with st.spinner('Đang tải Audio từ Cloud...'):
+            audio_bytes = load_audio(drive_id)
+            st.audio(audio_bytes, format="audio/mp3")
+
+    # 7.2. HIỂN THỊ TRANSCRIPT (KỊCH BẢN) NGAY DƯỚI AUDIO
+    with st.expander("📖 Xem Transcript (Kịch bản hội thoại)"):
+        script_text = transcript_dict.get(selected_track, "Chưa có dữ liệu Transcript cho bài này.")
+        # Định dạng lại văn bản để Markdown xuống dòng chính xác
+        st.markdown(script_text.replace('\n', '  \n'))
+
+    # 7.3. HIỂN THỊ CÂU HỎI VÀ ĐÁP ÁN
+    st.markdown("### 📝 Câu hỏi bài tập")
+
+    all_done = all([st.session_state.icao_answers.get(str(idx), False) for idx in current_track_indices])
+    if all_done:
+        st.success("✅ Bạn đã hoàn tất bài nghe này!")
+
+    for i, (index, row) in enumerate(track_data.iterrows()):
+        with st.container():
+            st.write(f"**Câu {i+1}: {row['Question']}**")
+            
+            with st.expander(f"👁️ Xem đáp án chuẩn"):
+                st.info(f"**Đáp án:** {row['Answer']}")
+            st.markdown("<br>", unsafe_allow_html=True)
+
+    # --- KHU VỰC NÚT ĐIỀU HƯỚNG BÀI NGHE ---
+    st.write("---")
+    col1, col2, col3 = st.columns([1, 4, 1])
+    
+    current_track_idx = unique_tracks.index(selected_track)
+    
+    if current_track_idx > 0:
+        col1.button("⬅ Bài trước", on_click=go_prev_track, args=(unique_tracks,))
+
+    if current_track_idx < len(unique_tracks) - 1:
+        col3.button("Hoàn tất & Sang bài tiếp theo ➡️", on_click=complete_track_and_next, args=(unique_tracks, current_track_indices), type="primary")
+    else:
+        if col3.button("Hoàn tất toàn bộ 🎉", type="primary"):
+            for idx in current_track_indices:
+                st.session_state.icao_answers[str(idx)] = True
+            save_icao_progress()
+            st.success("Chúc mừng bạn đã ôn xong tất cả các bài nghe!")
+            st.balloons()
