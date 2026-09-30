@@ -416,10 +416,10 @@ def load_audio(drive_id):
 # --- 5. MÀN HÌNH KHAI BÁO TÊN BAN ĐẦU ---
 if st.session_state.user_name == "":
     st.title("✈️ Phần mềm Luyện Nghe ICAO Level 4")
-    st.subheader("Hệ thống tự động đồng bộ tiến độ học")
+    st.subheader("Đóng góp ý kiến và update dữ liệu vui lòng liên hệ CB")
     
     with st.form("identity_form"):
-        name_input = st.text_input("Nhập Tên định danh của bạn (VD: TrungATC):")
+        name_input = st.text_input("Nhập tên tắt của bạn (VD: CB):")
         submit_identity = st.form_submit_button("Bắt đầu ôn tập 🚀")
         if submit_identity:
             if name_input.strip() == "":
