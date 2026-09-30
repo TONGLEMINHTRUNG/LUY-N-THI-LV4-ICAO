@@ -25,7 +25,7 @@ st.subheader(f"Đang phát: {selected_track}")
 
 # Phát Audio từ Drive (lấy Drive ID từ dòng đầu tiên của Track)
 drive_id = track_data.iloc[0]['Drive_ID']
-direct_audio_url = f"https://drive.google.com/uc?export=download&id={drive_id}"
+direct_audio_url = f"[https://drive.google.com/uc?id=](https://drive.google.com/uc?id=){drive_id}"
 st.audio(direct_audio_url, format="audio/mp3")
 
 st.markdown("### 📝 Câu hỏi bài tập")
