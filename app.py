@@ -46,7 +46,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Lấy đường link API từ Secrets
+# Lấy đường link API từ Secrets (Nếu chưa set trong Secrets thì dùng link cứng dự phòng)
 API_URL = st.secrets.get("API_URL", "https://script.google.com/macros/s/AKfycbxeWNQeOcccY3QVjqGiyIROaOOvzCBmpLbIstLgW9IaDR6pzFxXh6j6S99bvno0Yl-T/exec")
 
 if 'executor' not in st.session_state:
@@ -56,8 +56,6 @@ if 'executor' not in st.session_state:
 def init_states():
     if 'user_name' not in st.session_state: st.session_state.user_name = ""
     if 'db_loaded' not in st.session_state: st.session_state.db_loaded = False
-    
-    # State của hệ thống ôn thi (Lưu đáp án nháp)
     if 'icao_answers' not in st.session_state: st.session_state.icao_answers = {}
 
 init_states()
@@ -86,11 +84,15 @@ def save_icao_progress():
     }
     st.session_state.executor.submit(_async_post_request, API_URL, payload)
 
-# Lưu đáp án nháp mỗi khi người dùng gõ
 def on_answer_change(idx_str):
     selected_val = st.session_state[f"nhap_{idx_str}"]
     st.session_state.icao_answers[idx_str] = selected_val
     save_icao_progress()
+
+# Hàm Callback chuyển đổi bài hát tránh lỗi xung đột Widget
+def change_track(step, tracks_list):
+    current_idx = tracks_list.index(st.session_state.selected_track_key)
+    st.session_state.selected_track_key = tracks_list[current_idx + step]
 
 # --- 4. TẢI DỮ LIỆU ĐỀ THI VÀ AUDIO ---
 @st.cache_data(ttl=60)
@@ -126,7 +128,7 @@ if st.session_state.user_name == "":
     st.markdown("<br><hr><p style='text-align: center; color: gray; font-style: italic;'>💡 Tiến độ làm bài của bạn sẽ được lưu trữ đám mây, tự động khôi phục trên mọi thiết bị.</p>", unsafe_allow_html=True)
     st.stop()
 
-# --- TẢI TIẾN ĐỘ TỪ CLOUD ---
+# --- TẢI TIẾN ĐỘ TỪ CLOUD CHO NGƯỜI DÙNG HIỆN TẠI ---
 if not df.empty and not st.session_state.db_loaded:
     with st.spinner("🔄 Đang đồng bộ tiến độ ôn tập từ Cloud..."):
         progress = fetch_progress_from_db(st.session_state.user_name)
@@ -153,14 +155,12 @@ with st.sidebar:
     st.title("🎧 Chọn Bài Nghe")
     unique_tracks = df['Track_Name'].unique().tolist()
     
-    # Khởi tạo giá trị mặc định cho hộp chọn Track nếu chưa có
     if "selected_track_key" not in st.session_state:
         st.session_state.selected_track_key = unique_tracks[0]
     
     completed_count = len([x for x in st.session_state.icao_answers.values() if str(x).strip() != ""])
     st.info(f"📊 Tiến độ tổng: **{completed_count}/{len(df)}** câu")
 
-    # Gắn biến session_state vào Selectbox để có thể điều khiển nó từ bên ngoài
     selected_track = st.selectbox(
         "📌 Danh sách Track:", 
         unique_tracks,
@@ -193,7 +193,7 @@ else:
     
     drive_id = track_data.iloc[0]['Drive_ID']
     if pd.isna(drive_id) or str(drive_id).strip() == "":
-        st.error("⚠️ Bài này chưa có ID Audio.")
+        st.error("⚠️️ Bài này chưa có ID Audio.")
     else:
         with st.spinner('Đang tải Audio từ Cloud...'):
             audio_bytes = load_audio(drive_id)
@@ -222,20 +222,15 @@ else:
                 st.info(f"**Đáp án:** {row['Answer']}")
             st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- KHU VỰC NÚT ĐIỀU HƯỚNG BÀI NGHE ---
+    # --- KHU VỰC NÚT ĐIỀU HƯỚNG BÀI NGHE (DÙNG CALLBACK) ---
     st.write("---")
     col1, col2, col3 = st.columns([1, 4, 1])
     
     current_track_idx = unique_tracks.index(selected_track)
     
     if current_track_idx > 0:
-        if col1.button("⬅ Bài trước"):
-            # Cập nhật trực tiếp State của Selectbox
-            st.session_state.selected_track_key = unique_tracks[current_track_idx - 1]
-            st.rerun()
+        # Sử dụng on_click để chuyển bài mượt mà
+        col1.button("⬅ Bài trước", on_click=change_track, args=(-1, unique_tracks))
 
     if current_track_idx < len(unique_tracks) - 1:
-        if col3.button("Bài tiếp theo ➡️"):
-            # Cập nhật trực tiếp State của Selectbox
-            st.session_state.selected_track_key = unique_tracks[current_track_idx + 1]
-            st.rerun()
+        col3.button("Bài tiếp theo ➡️", on_click=change_track, args=(1, unique_tracks))
